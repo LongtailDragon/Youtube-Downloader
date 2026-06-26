@@ -1,5 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
 
-*.mp3
-/downloads
-/downloads/Structure
-*.pyc
+# Tool output
+downloads/
+*.part
+*.ytdl
+
+# Local model/cache folders, if you choose to keep Whisper models here
+models/
+.cache/
+
+# IDE
+.idea/
