@@ -291,9 +291,6 @@ uv run pre-commit run --all-files
 
 To report a vulnerability, please follow `SECURITY.md` and avoid opening a public issue for sensitive findings.
 
-## Code of Conduct
-
-This project follows the Contributor Covenant. See `CODE_OF_CONDUCT.md`.
 
 
 ## License
