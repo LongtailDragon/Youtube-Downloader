@@ -14,3 +14,9 @@ models/
 
 # IDE
 .idea/
+
+# Local environment files
+.env
+
+# Local environment files
+.env

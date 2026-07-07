@@ -2,7 +2,25 @@
 name = "youtube-downloader"
 version = "0.1.0"
 description = "Local command-line YouTube downloader/converter/transcriber"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Red Door Blue Door LLC", email = "tobes@longtaildragon.com" },
+]
+keywords = ["youtube", "yt-dlp", "ffmpeg", "whisper", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+]
 dependencies = [
     "yt-dlp>=2025.12.8",
     "faster-whisper>=1.2.1",
@@ -19,4 +37,5 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pre-commit>=4.2.0",
 ]

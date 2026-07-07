@@ -1,62 +1,60 @@
-# Youtube Downloader
+# YouTube Downloader
 
-Local command-line tool for downloading a YouTube URL, converting it to MKV or MP3, or transcribing audio to TXT using local tools only.
+Portable command-line tool for downloading YouTube videos, converting media, creating local transcripts, and generating local summaries.
+
+No cloud transcription APIs are required. Downloading still needs internet access, but conversion/transcription/summarization run on your machine.
+
+## Features
+
+- Download best available source media via `yt-dlp`
+- Convert/remux to `mkv`
+- Convert audio to `mp3`
+- Transcribe to `txt` using either:
+	- global OpenAI Whisper CLI (default path), or
+	- `faster-whisper` when `--model` or `YTDL_WHISPER_MODEL` is set
+- Stream local transcript summaries through Ollama (`--format summary`)
 
 ## Requirements
 
 - Python 3.10+
-- uv
-- ffmpeg available on PATH
-- global `whisper` command for default TXT transcription
+- `uv`
+- `ffmpeg` on `PATH`
+- Optional: `ollama` on `PATH` for summary mode
+- Optional: global `whisper` command for default TXT mode
 
-This project uses open-source local tooling:
+### Prerequisite Installation
 
-- `yt-dlp` for YouTube downloads
-- `ffmpeg` for MKV/MP3 conversion
-- global OpenAI Whisper CLI for default local transcription
-- optional `faster-whisper` if you pass `--model` or set `YTDL_WHISPER_MODEL`
+Install prerequisites before running `uv sync`.
 
-No cloud transcription API is used.
+Windows (PowerShell, via winget):
 
-Current local default installed on this PC:
-
-- Whisper command: `C:\Users\Admin\.local\bin\whisper`
-- OpenAI Whisper model: `C:\Users\Admin\Models\openai-whisper\base.en.pt`
-- Optional faster-whisper model: `C:\Users\Admin\Models\faster-whisper-base.en`
-
-## Install
-
-From this folder:
-
-```bash
-uv sync
+```powershell
+winget install --id Python.Python.3.12 -e
+winget install --id astral-sh.uv -e
+winget install --id Gyan.FFmpeg -e
+winget install --id Ollama.Ollama -e
 ```
 
-Global Whisper install, if needed on another machine:
+macOS (Homebrew):
+
+```bash
+brew install python uv ffmpeg
+brew install --cask ollama
+```
+
+Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv ffmpeg
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Install Whisper CLI (optional, needed for default TXT backend):
 
 ```bash
 uv tool install openai-whisper
 ```
-
-Pre-download the default local model, if needed on another machine:
-
-```bash
-whisper C:\path\to\short-test-audio.wav --model base.en --model_dir C:\Users\Admin\Models\openai-whisper --output_format txt --fp16 False --device cpu
-```
-
-## Fresh install notes for another system
-
-These notes are for future me / another assistant reinstalling this tool on a new Windows machine.
-
-### 1. Install system dependencies
-
-Install these first and make sure each command is available on PATH:
-
-- Python 3.10 or newer
-- `uv`
-- `ffmpeg`
-- `ollama`, only needed for `format summary`
-- Git, if cloning from GitHub
 
 Quick checks:
 
@@ -65,279 +63,239 @@ python --version
 uv --version
 ffmpeg -version
 ollama --version
+whisper --help
 ```
 
-On Windows, practical install options are:
+## Install
 
-```powershell
-winget install --id astral-sh.uv
-winget install --id Gyan.FFmpeg
-winget install --id Ollama.Ollama
-```
-
-If the machine does not already have Python, install Python 3.11+ from python.org or winget.
-
-### 2. Clone or copy this repo
-
-Expected path on this PC is:
-
-```text
-C:\wamp64\www\Youtube-Downloader
-```
-
-But the repo can live anywhere. From the repo folder, install the project dependencies:
+1. Clone this repository.
+2. Install project dependencies:
 
 ```bash
 uv sync
 ```
 
-This installs the Python dependencies from `pyproject.toml`, including:
-
-- `yt-dlp`
-- `faster-whisper`
-- dev dependency: `pytest`
-
-### 3. Install the global `ytd` command
-
-From the repo folder:
+3. Optional but recommended: install the global `ytd` command:
 
 ```bash
 uv tool install --editable . --force
 ```
 
-Verify it works from outside the repo:
-
-```bash
-ytd help
-```
-
-If `ytd` is not found, add uv's tool bin directory to PATH. On this Windows PC it is:
-
-```text
-C:\Users\Admin\.local\bin
-```
-
-On another Windows user account, replace `Admin` with that username.
-
-### 4. Install local Whisper transcription
-
-The default TXT transcription path uses the global OpenAI Whisper CLI.
-
-Install it:
-
-```bash
-uv tool install openai-whisper
-```
-
-Verify:
-
-```bash
-whisper --help
-```
-
-Pre-download the default `base.en` model so transcription works locally without needing a model path. Create or use a tiny local audio file and run:
-
-```bash
-whisper C:\path\to\short-test-audio.wav --model base.en --model_dir C:\Users\Admin\Models\openai-whisper --output_format txt --fp16 False --device cpu
-```
-
-Expected model file after download:
-
-```text
-C:\Users\Admin\Models\openai-whisper\base.en.pt
-```
-
-On another Windows user account, replace `Admin` with that username. If changing this location, also update `DEFAULT_OPENAI_WHISPER_MODEL_DIR` in `src/youtube_downloader/cli.py`.
-
-### 5. Optional faster-whisper fallback
-
-The project can use faster-whisper when `--model` is passed or `YTDL_WHISPER_MODEL` is set.
-
-Optional default location used on this PC:
-
-```text
-C:\Users\Admin\Models\faster-whisper-base.en
-```
-
-If needed, download with Python / Hugging Face Hub from the repo venv:
-
-```bash
-uv run python -c "from huggingface_hub import snapshot_download; from pathlib import Path; p=Path.home()/'Models'/'faster-whisper-base.en'; p.parent.mkdir(parents=True, exist_ok=True); snapshot_download('Systran/faster-whisper-base.en', local_dir=str(p))"
-```
-
-Then either pass it explicitly:
-
-```bash
-ytd "YOUTUBE_URL" --format txt --model C:\Users\Admin\Models\faster-whisper-base.en
-```
-
-Or set:
-
-```bash
-set YTDL_WHISPER_MODEL=C:\Users\Admin\Models\faster-whisper-base.en
-```
-
-### 6. Install Ollama model for summaries
-
-Summary mode requires local Ollama running at:
-
-```text
-http://127.0.0.1:11434
-```
-
-Install the default model:
-
-```bash
-ollama pull llama3.1:8b
-```
-
-Optional models that have worked on this PC:
-
-```bash
-ollama pull qwen3:8b
-ollama pull qwen2.5-coder:7b
-```
-
-Verify Ollama has models:
-
-```bash
-ollama list
-```
-
-### 7. Verify the installation
-
-From the repo folder:
-
-```bash
-uv run pytest tests/test_cli_defaults.py -q
-uv run python -m py_compile src/youtube_downloader/cli.py
-```
-
-From any folder:
+4. Verify CLI install:
 
 ```bash
 ytd help
 ytd --help
 ```
 
-Smoke-test MP3 download:
+## Optional Local AI Setup
+
+### Whisper CLI (default TXT backend)
+
+Install:
 
 ```bash
-ytd "https://www.youtube.com/watch?v=jNQXAC9IVRw" --format mp3 --output-dir C:\Temp\ytd-test
+uv tool install openai-whisper
 ```
 
-Smoke-test TXT transcription:
+Pre-download the `base.en` model to a local model directory (example uses a placeholder path):
 
 ```bash
-ytd "https://www.youtube.com/watch?v=jNQXAC9IVRw" --format txt --language en --device cpu --output-dir C:\Temp\ytd-test
+whisper /path/to/sample-audio.wav --model base.en --model_dir /path/to/models/openai-whisper --output_format txt --fp16 False --device cpu
 ```
 
-Smoke-test Ollama summary:
+Default model directory in code:
+
+- `Path.home() / "Models" / "openai-whisper"`
+
+If you want a different default, update `DEFAULT_OPENAI_WHISPER_MODEL_DIR` in `src/youtube_downloader/cli.py`.
+
+### faster-whisper (optional backend)
+
+When you pass `--model` or set `YTDL_WHISPER_MODEL`, the app uses `faster-whisper`.
+
+Example model download:
 
 ```bash
-ytd "https://www.youtube.com/watch?v=jNQXAC9IVRw" format summary --language en --device cpu --output-dir C:\Temp\ytd-test --ollama-model llama3.1:8b
+uv run python -c "from huggingface_hub import snapshot_download; from pathlib import Path; p=Path.home()/'Models'/'faster-whisper-base.en'; p.parent.mkdir(parents=True, exist_ok=True); snapshot_download('Systran/faster-whisper-base.en', local_dir=str(p))"
 ```
 
-### 8. Known dependency warning
+Use it directly:
 
-`yt-dlp` may warn:
-
-```text
-No supported JavaScript runtime could be found
+```bash
+ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format txt --model /path/to/models/faster-whisper-base.en
 ```
 
-The tool can still work, but some YouTube videos/formats may fail in the future. If that happens, install a JavaScript runtime supported by yt-dlp, such as Deno or Node, and make sure it is on PATH.
+Or set an environment variable:
 
+Windows (PowerShell):
+
+```powershell
+$env:YTDL_WHISPER_MODEL = "C:\path\to\models\faster-whisper-base.en"
+```
+
+macOS/Linux:
+
+```bash
+export YTDL_WHISPER_MODEL="/path/to/models/faster-whisper-base.en"
+```
+
+### Ollama (summary mode)
+
+Install a model:
+
+```bash
+ollama pull llama3.1:8b
+```
+
+Then run summary mode with either syntax:
+
+```bash
+ytd "https://www.youtube.com/watch?v=VIDEO_ID" format summary
+ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format summary
+```
 
 ## Usage
 
-You can run the tool from any folder with the global `ytd` command.
-
-Show the short command list:
+Show short help:
 
 ```bash
 ytd help
 ```
 
-Download best video/audio as MP4/WebM/MKV-compatible source:
+Download best source media:
 
 ```bash
 ytd "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
-Download and convert/remux to MKV:
+Convert/remux to MKV:
 
 ```bash
 ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format mkv
 ```
 
-Download/convert audio to MP3:
+Convert to MP3:
 
 ```bash
 ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format mp3
 ```
 
-Download audio and transcribe to TXT locally with the global Whisper install:
+Transcribe to TXT:
 
 ```bash
-ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format txt
+ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format txt --language en --device cpu
 ```
 
-Download audio, save a TXT transcript, then stream a local Ollama summary to the terminal:
+Generate transcript + local summary:
 
 ```bash
-ytd "https://www.youtube.com/watch?v=VIDEO_ID" format summary
+ytd "https://www.youtube.com/watch?v=VIDEO_ID" format summary --ollama-model llama3.1:8b
 ```
 
-Equivalent long-form option:
-
-```bash
-ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format summary
-```
-
-The default summary model is `llama3.1:8b`. Override it with:
-
-```bash
-ytd "https://www.youtube.com/watch?v=VIDEO_ID" format summary --ollama-model qwen3:8b
-```
-
-You can combine outputs:
+Produce multiple outputs in one run:
 
 ```bash
 ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format mkv --format mp3 --format txt
 ```
 
-The old project-local command still works from this folder:
+Local project command without global install:
 
 ```bash
 uv run ytdl-local "https://www.youtube.com/watch?v=VIDEO_ID" --format mp3
 ```
 
-Or use the Windows wrapper:
+Windows wrapper script:
 
 ```bat
 run-ytdl-local.bat "https://www.youtube.com/watch?v=VIDEO_ID" --format mp3
 ```
 
-## Options
+macOS/Linux wrapper script:
 
-```text
---output-dir downloads          Where files are saved
---format original|mkv|mp3|txt   Output type; can be repeated
---format summary                Save TXT transcript, then stream Ollama summary
---model PATH_OR_NAME            Optional faster-whisper model path/name; overrides global Whisper CLI
---language en                   Optional transcription language hint
---device cpu|cuda|auto          Transcription device. For global Whisper, auto omits the device flag.
---compute-type int8             faster-whisper-only compute type
---ollama-model llama3.1:8b       Local Ollama model for summaries
---keep-intermediate             Keep temporary downloaded media after conversion
---audio-only                    Download audio only before conversion/transcription
+```bash
+sh run-ytdl-local.sh "https://www.youtube.com/watch?v=VIDEO_ID" --format mp3
 ```
 
-## Notes
+## CLI Options
 
-- YouTube downloading itself requires internet access.
-- Conversion and transcription run locally.
-- TXT transcription now works without `--model` by using the globally installed `whisper` command and the locally cached `base.en` model.
-- If you set `YTDL_WHISPER_MODEL` or pass `--model`, the tool uses faster-whisper instead.
-- Summary mode requires Ollama running locally at `http://127.0.0.1:11434` and the requested model installed.
+```text
+--output-dir downloads                 Output directory (default: downloads)
+--format original|mkv|mp3|txt|summary Output format; can be repeated
+--model PATH_OR_NAME                  faster-whisper model path/name
+--language en                         Optional language hint
+--device cpu|cuda|auto                Transcription device
+--compute-type default|int8|float16   faster-whisper compute type
+--ollama-model llama3.1:8b            Local Ollama model for summary mode
+--keep-intermediate                   Keep downloaded source media
+--audio-only                          Download audio-only source
+--print-json                          Print machine-readable result
+```
+
+## Configuration
+
+Environment variables:
+
+- `YTDL_WHISPER_MODEL`: default `faster-whisper` model path/name
+- `YTDL_MODEL_DIR`: preferred directory containing `faster-whisper-base.en`
+- `YTD_OLLAMA_MODEL`: default Ollama model for summary mode
+
+## Verification
+
+Run tests:
+
+```bash
+uv run pytest -q
+```
+
+Syntax check:
+
+```bash
+uv run python -m py_compile src/youtube_downloader/cli.py
+```
+
+CI runs these checks on Windows, macOS, and Linux for Python 3.10-3.12:
+
+- `.github/workflows/ci.yml`
+
+## Troubleshooting
+
+`No supported JavaScript runtime could be found` from `yt-dlp`:
+
+- Install a supported runtime such as Node.js or Deno.
+- Ensure it is available on `PATH`.
+
+`whisper` command not found:
+
+- Install with `uv tool install openai-whisper`.
+- Confirm your tool bin directory is on `PATH`.
+
+Ollama connection errors:
+
+- Start Ollama locally.
+- Check `ollama list` and verify your chosen model is installed.
+
+## Contributing
+
+Contributions are welcome. Please read `CONTRIBUTING.md` for development setup, testing, and pull request guidelines.
+
+Recommended local checks before commit:
+
+```bash
+uv sync --group dev
+uv run pre-commit install
+uv run pre-commit run --all-files
+```
+
+## Security
+
+To report a vulnerability, please follow `SECURITY.md` and avoid opening a public issue for sensitive findings.
+
+## Code of Conduct
+
+This project follows the Contributor Covenant. See `CODE_OF_CONDUCT.md`.
+
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE`.

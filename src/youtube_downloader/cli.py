@@ -17,11 +17,32 @@ from yt_dlp import YoutubeDL
 
 
 DEFAULT_MODEL_NAME = "faster-whisper-base.en"
-DEFAULT_MODEL_DIRS = (
-    Path.home() / "Models",
-    Path.home() / "models",
-    Path("C:/models"),
-)
+
+
+def default_model_dirs() -> tuple[Path, ...]:
+    dirs = [
+        Path.home() / "Models",
+        Path.home() / "models",
+    ]
+    env_dir = os.environ.get("YTDL_MODEL_DIR")
+    if env_dir:
+        dirs.insert(0, Path(env_dir))
+
+    if os.name == "nt":
+        dirs.append(Path("C:/models"))
+    else:
+        dirs.extend([Path("/opt/models"), Path("/usr/local/share/models")])
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in dirs:
+        if path not in seen:
+            unique.append(path)
+            seen.add(path)
+    return tuple(unique)
+
+
+DEFAULT_MODEL_DIRS = default_model_dirs()
 DEFAULT_OPENAI_WHISPER_MODEL = "base.en"
 DEFAULT_OPENAI_WHISPER_MODEL_DIR = Path.home() / "Models" / "openai-whisper"
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
@@ -266,15 +287,21 @@ def resolve_whisper_model(model: str | None) -> str:
     if env_model:
         return env_model
 
-    for model_root in DEFAULT_MODEL_DIRS:
+    model_dirs = list(DEFAULT_MODEL_DIRS)
+    env_dir = os.environ.get("YTDL_MODEL_DIR")
+    if env_dir:
+        env_path = Path(env_dir)
+        model_dirs = [env_path] + [root for root in model_dirs if root != env_path]
+
+    for model_root in model_dirs:
         candidate = model_root / DEFAULT_MODEL_NAME
         if candidate.exists():
             return str(candidate)
 
-    searched = ", ".join(str(root / DEFAULT_MODEL_NAME) for root in DEFAULT_MODEL_DIRS)
+    searched = ", ".join(str(root / DEFAULT_MODEL_NAME) for root in model_dirs)
     raise ToolError(
         "No local faster-whisper model was found. Install the default model at "
-        f"{DEFAULT_MODEL_DIRS[0] / DEFAULT_MODEL_NAME}, set YTDL_WHISPER_MODEL, "
+        f"{model_dirs[0] / DEFAULT_MODEL_NAME}, set YTDL_WHISPER_MODEL, "
         "or pass --model explicitly. Searched: "
         f"{searched}"
     )

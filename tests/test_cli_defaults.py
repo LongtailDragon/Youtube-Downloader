@@ -18,21 +18,32 @@ def test_resolve_whisper_model_uses_env_default(monkeypatch):
 
 def test_resolve_whisper_model_uses_global_default_folder(monkeypatch, tmp_path):
     monkeypatch.delenv("YTDL_WHISPER_MODEL", raising=False)
+    monkeypatch.delenv("YTDL_MODEL_DIR", raising=False)
     model_dir = tmp_path / "faster-whisper-base.en"
     model_dir.mkdir()
     monkeypatch.setattr(cli, "DEFAULT_MODEL_DIRS", (tmp_path,))
     assert cli.resolve_whisper_model(None) == str(model_dir)
 
 
+def test_resolve_whisper_model_uses_ytdl_model_dir_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("YTDL_WHISPER_MODEL", raising=False)
+    env_root = tmp_path / "models"
+    env_model_dir = env_root / "faster-whisper-base.en"
+    env_model_dir.mkdir(parents=True)
+    monkeypatch.setenv("YTDL_MODEL_DIR", str(env_root))
+    monkeypatch.setattr(cli, "DEFAULT_MODEL_DIRS", ())
+    assert cli.resolve_whisper_model(None) == str(env_model_dir)
+
+
 def test_select_backend_prefers_global_whisper_cli_when_no_model(monkeypatch, tmp_path):
     monkeypatch.delenv("YTDL_WHISPER_MODEL", raising=False)
     monkeypatch.setattr(cli, "DEFAULT_MODEL_DIRS", (tmp_path,))
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "C:/Users/Admin/.local/bin/whisper" if name == "whisper" else None)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "C:/tools/whisper/whisper.exe" if name == "whisper" else None)
     assert cli.select_transcription_backend(None) == "whisper-cli"
 
 
 def test_select_backend_uses_faster_whisper_when_model_is_explicit(monkeypatch):
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "C:/Users/Admin/.local/bin/whisper")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "C:/tools/whisper/whisper.exe")
     assert cli.select_transcription_backend("C:/models/explicit") == "faster-whisper"
 
 
