@@ -50,7 +50,7 @@ sudo apt install -y python3 python3-venv ffmpeg
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Install Whisper CLI (optional, needed for default TXT backend):
+Install Whisper CLI:
 
 ```bash
 uv tool install openai-whisper
