@@ -50,7 +50,7 @@ sudo apt install -y python3 python3-venv ffmpeg
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Install Whisper CLI (optional, needed for default TXT backend):
+Install Whisper CLI:
 
 ```bash
 uv tool install openai-whisper
@@ -193,6 +193,12 @@ Generate transcript + local summary:
 ytd "https://www.youtube.com/watch?v=VIDEO_ID" format summary --ollama-model llama3.1:8b
 ```
 
+Auto-detect playlist and process videos one at a time:
+
+```bash
+ytd "https://www.youtube.com/playlist?list=PLAYLIST_ID" --format txt
+```
+
 Produce multiple outputs in one run:
 
 ```bash
@@ -231,6 +237,8 @@ sh run-ytdl-local.sh "https://www.youtube.com/watch?v=VIDEO_ID" --format mp3
 --audio-only                          Download audio-only source
 --print-json                          Print machine-readable result
 ```
+
+Playlist URLs are auto-detected and expanded to video URLs. Videos are processed sequentially (one at a time), so transcription and conversion workloads do not run concurrently.
 
 ## Configuration
 

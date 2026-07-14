@@ -109,3 +109,112 @@ def test_summary_format_creates_txt_and_streams_summary(monkeypatch, tmp_path, c
     assert result["outputs"]["txt"] == str(transcript)
     assert result["outputs"]["summary"] == "streamed-to-terminal"
     assert "SUMMARY: useful SEO tactics" in capsys.readouterr().out
+
+
+def test_is_playlist_url_detects_youtube_playlist():
+    assert cli.is_playlist_url("https://www.youtube.com/playlist?list=PLCxKMhCMh2HlWglySHj7Rrc9qZy9aSG1j")
+    assert cli.is_playlist_url("https://www.youtube.com/watch?v=abc123&list=PLCxKMhCMh2HlWglySHj7Rrc9qZy9aSG1j")
+    assert not cli.is_playlist_url("https://www.youtube.com/watch?v=abc123")
+
+
+def test_extract_playlist_info_builds_video_urls(monkeypatch):
+    class FakeYDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, _url, download):
+            assert download is False
+            return {
+                "_type": "playlist",
+                "title": "Demo Playlist",
+                "entries": [
+                    {"id": "one"},
+                    {"webpage_url": "https://www.youtube.com/watch?v=two"},
+                    {"url": "https://www.youtube.com/watch?v=three"},
+                ],
+            }
+
+    monkeypatch.setattr(cli, "YoutubeDL", FakeYDL)
+    result = cli.extract_playlist_info("https://www.youtube.com/playlist?list=abc")
+
+    assert result is not None
+    assert result.title == "Demo Playlist"
+    assert result.video_urls == [
+        "https://www.youtube.com/watch?v=one",
+        "https://www.youtube.com/watch?v=two",
+        "https://www.youtube.com/watch?v=three",
+    ]
+
+
+def test_build_outputs_processes_playlist_sequentially(monkeypatch, tmp_path):
+    playlist = cli.PlaylistInfo(
+        source_url="https://www.youtube.com/playlist?list=abc",
+        title="Demo Playlist",
+        video_urls=[
+            "https://www.youtube.com/watch?v=one",
+            "https://www.youtube.com/watch?v=two",
+        ],
+    )
+    monkeypatch.setattr(cli, "extract_playlist_info", lambda url: playlist)
+
+    seen: list[str] = []
+
+    def fake_build_single_output(args, url):
+        seen.append(url)
+        return {
+            "title": f"title-{len(seen)}",
+            "video_id": f"id-{len(seen)}",
+            "url": url,
+            "outputs": {"txt": str(tmp_path / f"out-{len(seen)}.txt")},
+        }
+
+    monkeypatch.setattr(cli, "build_single_output", fake_build_single_output)
+
+    args = cli.parse_args([
+        "https://www.youtube.com/playlist?list=abc",
+        "--format",
+        "txt",
+        "--output-dir",
+        str(tmp_path),
+    ])
+    result = cli.build_outputs(args)
+
+    assert seen == [
+        "https://www.youtube.com/watch?v=one",
+        "https://www.youtube.com/watch?v=two",
+    ]
+    assert result["playlist"]["count"] == 2
+    assert len(result["items"]) == 2
+
+
+def test_main_prints_playlist_summary(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "build_outputs",
+        lambda _args: {
+            "playlist": {
+                "title": "Demo Playlist",
+                "url": "https://www.youtube.com/playlist?list=abc",
+                "count": 1,
+            },
+            "items": [
+                {
+                    "title": "Video 1",
+                    "video_id": "abc123",
+                    "url": "https://www.youtube.com/watch?v=abc123",
+                    "outputs": {"txt": "downloads/Video 1 [abc123].txt"},
+                }
+            ],
+        },
+    )
+
+    assert cli.main(["https://www.youtube.com/playlist?list=abc", "--format", "txt"]) == 0
+    output = capsys.readouterr().out
+    assert "Playlist: Demo Playlist" in output
+    assert "Videos processed: 1" in output

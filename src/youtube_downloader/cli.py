@@ -12,6 +12,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import parse_qs, urlparse
 
 from yt_dlp import YoutubeDL
 
@@ -59,6 +60,13 @@ class DownloadedMedia:
     title: str
     video_id: str
     webpage_url: str
+
+
+@dataclass(frozen=True)
+class PlaylistInfo:
+    source_url: str
+    title: str
+    video_urls: list[str]
 
 
 def normalize_argv(argv: list[str] | None) -> list[str] | None:
@@ -225,6 +233,54 @@ def download_youtube(url: str, output_dir: Path, audio_only: bool) -> Downloaded
         title=info.get("title") or source.stem,
         video_id=info.get("id") or "unknown-id",
         webpage_url=info.get("webpage_url") or url,
+    )
+
+
+def is_playlist_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if "youtube.com" not in parsed.netloc and "youtu.be" not in parsed.netloc:
+        return False
+    params = parse_qs(parsed.query)
+    return bool(params.get("list"))
+
+
+def extract_playlist_info(url: str) -> PlaylistInfo | None:
+    if not is_playlist_url(url):
+        return None
+
+    ydl_opts = {
+        "extract_flat": True,
+        "skip_download": True,
+        "noplaylist": False,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if not isinstance(info, dict) or info.get("_type") != "playlist":
+        return None
+
+    entries = info.get("entries") or []
+    video_urls: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_url = entry.get("url") or entry.get("webpage_url")
+        if isinstance(entry_url, str) and entry_url.startswith("http"):
+            video_urls.append(entry_url)
+            continue
+        video_id = entry.get("id")
+        if video_id:
+            video_urls.append(f"https://www.youtube.com/watch?v={video_id}")
+
+    if not video_urls:
+        return None
+
+    return PlaylistInfo(
+        source_url=url,
+        title=info.get("title") or "Untitled Playlist",
+        video_urls=video_urls,
     )
 
 
@@ -490,12 +546,12 @@ def should_remove_source(formats: Iterable[str], keep_intermediate: bool) -> boo
     return not keep_intermediate and "original" not in requested and bool(requested & {"mkv", "mp3", "txt", "summary"})
 
 
-def build_outputs(args: argparse.Namespace) -> dict:
+def build_single_output(args: argparse.Namespace, url: str) -> dict:
     formats = args.formats or ["original"]
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     needs_audio_only = args.audio_only or set(formats).issubset({"mp3", "txt", "summary"})
-    media = download_youtube(args.url, args.output_dir, audio_only=needs_audio_only)
+    media = download_youtube(url, args.output_dir, audio_only=needs_audio_only)
     base_stem = safe_stem(f"{media.title} [{media.video_id}]")
 
     outputs: dict[str, str] = {}
@@ -531,6 +587,28 @@ def build_outputs(args: argparse.Namespace) -> dict:
         "video_id": media.video_id,
         "url": media.webpage_url,
         "outputs": outputs,
+    }
+
+
+def build_outputs(args: argparse.Namespace) -> dict:
+    playlist = extract_playlist_info(args.url)
+    if playlist is None:
+        return build_single_output(args, args.url)
+
+    items: list[dict] = []
+    total = len(playlist.video_urls)
+    for idx, video_url in enumerate(playlist.video_urls, start=1):
+        print(f"[{idx}/{total}] Processing: {video_url}")
+        item_result = build_single_output(args, video_url)
+        items.append(item_result)
+
+    return {
+        "playlist": {
+            "title": playlist.title,
+            "url": playlist.source_url,
+            "count": total,
+        },
+        "items": items,
     }
 
 
@@ -576,10 +654,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_json:
         print(json.dumps(result, indent=2))
     else:
-        print("Done.")
-        print(f"Title: {result['title']}")
-        for label, path in result["outputs"].items():
-            print(f"{label}: {path}")
+        if "items" in result:
+            playlist = result["playlist"]
+            print("Done.")
+            print(f"Playlist: {playlist['title']}")
+            print(f"Videos processed: {playlist['count']}")
+            for item in result["items"]:
+                print(f"Title: {item['title']}")
+                for label, path in item["outputs"].items():
+                    print(f"{label}: {path}")
+        else:
+            print("Done.")
+            print(f"Title: {result['title']}")
+            for label, path in result["outputs"].items():
+                print(f"{label}: {path}")
     return 0
 
 
