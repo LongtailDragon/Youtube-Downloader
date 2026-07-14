@@ -208,6 +208,27 @@ def test_select_whisperx_compute_type_keeps_explicit_choice(monkeypatch):
     assert cli.select_whisperx_compute_type("cuda", "float32") == "float32"
 
 
+def test_format_timestamp_seconds_truncates_subsecond_precision():
+    assert cli.format_timestamp_seconds(137.633) == "00:02:17"
+    assert cli.format_timestamp_seconds(0.999) == "00:00:00"
+
+
+def test_collapse_diarized_segments_merges_adjacent_speaker_lines():
+    collapsed = cli.collapse_diarized_segments([
+        {"start": 137.633, "speaker": "SPEAKER_00", "text": "Hello"},
+        {"start": 140.215, "speaker": "SPEAKER_00", "text": "world."},
+        {"start": 143.000, "speaker": "SPEAKER_01", "text": "New speaker."},
+        {"start": 144.000, "speaker": "SPEAKER_01", "text": "More text."},
+        {"start": 145.000, "speaker": "SPEAKER_00", "text": "Back again."},
+    ])
+
+    assert collapsed == [
+        {"start": 137.633, "speaker": "SPEAKER_00", "text": "Hello world."},
+        {"start": 143.0, "speaker": "SPEAKER_01", "text": "New speaker. More text."},
+        {"start": 145.0, "speaker": "SPEAKER_00", "text": "Back again."},
+    ]
+
+
 def test_transcribe_with_whisperx_uses_current_diarization_api_and_caches_models(monkeypatch, tmp_path):
     calls = {"asr": 0, "align": 0, "diarize": 0}
 
@@ -241,11 +262,17 @@ def test_transcribe_with_whisperx_uses_current_diarization_api_and_caches_models
     fake_whisperx.load_align_model = fake_load_align_model
     fake_whisperx.align = lambda segments, align_model, metadata, audio, device, return_char_alignments=False: {
         "language": metadata["language"],
-        "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+        "segments": [
+            {"start": 137.633, "end": 140.215, "text": "hello"},
+            {"start": 141.156, "end": 145.919, "text": "again"},
+        ],
     }
     fake_whisperx.assign_word_speakers = lambda diarization, result: {
         "language": result["language"],
-        "segments": [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00", "text": "hello"}],
+        "segments": [
+            {"start": 137.633, "end": 140.215, "speaker": "SPEAKER_00", "text": "hello"},
+            {"start": 141.156, "end": 145.919, "speaker": "SPEAKER_00", "text": "again"},
+        ],
     }
 
     fake_diarize = types.ModuleType("whisperx.diarize")
@@ -283,7 +310,8 @@ def test_transcribe_with_whisperx_uses_current_diarization_api_and_caches_models
 
         text = transcript.read_text(encoding="utf-8")
         assert "Diarization: WhisperX" in text
-        assert "SPEAKER_00: hello" in text
+        assert "[00:02:17] SPEAKER_00: hello again" in text
+        assert "-->" not in text
 
     assert calls == {"asr": 1, "align": 1, "diarize": 1}
 

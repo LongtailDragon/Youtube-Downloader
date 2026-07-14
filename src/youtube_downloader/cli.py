@@ -607,13 +607,12 @@ def transcribe_with_whisperx_diarization(
         if min_speakers is not None or max_speakers is not None:
             handle.write(f"Speaker bounds: min={min_speakers}, max={max_speakers}\n")
         handle.write("\n")
-        for segment in result.get("segments", []):
-            start = format_timestamp(float(segment.get("start", 0.0)))
-            end = format_timestamp(float(segment.get("end", 0.0)))
-            speaker = segment.get("speaker") or "UNKNOWN"
-            text = str(segment.get("text", "")).strip()
-            if text:
-                handle.write(f"[{start} --> {end}] {speaker}: {text}\n")
+        collapsed_segments = collapse_diarized_segments(result.get("segments", []))
+        for segment in collapsed_segments:
+            start = format_timestamp_seconds(float(segment["start"]))
+            speaker = str(segment["speaker"])
+            text = str(segment["text"])
+            handle.write(f"[{start}] {speaker}: {text}\n")
     return target
 
 
@@ -711,6 +710,31 @@ def format_timestamp(seconds: float) -> str:
     h = total_minutes // 60
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
+def format_timestamp_seconds(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    s = total_seconds % 60
+    total_minutes = total_seconds // 60
+    m = total_minutes % 60
+    h = total_minutes // 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+def collapse_diarized_segments(segments: list[dict]) -> list[dict[str, str | float]]:
+    collapsed: list[dict[str, str | float]] = []
+    for segment in segments:
+        speaker = str(segment.get("speaker") or "UNKNOWN")
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            continue
+
+        start = float(segment.get("start", 0.0))
+        if collapsed and collapsed[-1]["speaker"] == speaker:
+            prev_text = str(collapsed[-1]["text"])
+            collapsed[-1]["text"] = f"{prev_text} {text}".strip()
+            continue
+
+        collapsed.append({"start": start, "speaker": speaker, "text": text})
+
+    return collapsed
 
 def should_remove_source(formats: Iterable[str], keep_intermediate: bool) -> bool:
     requested = set(formats)
