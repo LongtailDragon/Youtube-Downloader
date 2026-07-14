@@ -48,6 +48,11 @@ DEFAULT_OPENAI_WHISPER_MODEL = "base.en"
 DEFAULT_OPENAI_WHISPER_MODEL_DIR = Path.home() / "Models" / "openai-whisper"
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
 OLLAMA_GENERATE_URL = "http://127.0.0.1:11434/api/generate"
+DEFAULT_WHISPERX_MODEL = "small"
+
+_WHISPERX_ASR_MODELS: dict[tuple[str, str, str], object] = {}
+_WHISPERX_ALIGN_MODELS: dict[tuple[str, str], tuple[object, object]] = {}
+_WHISPERX_DIARIZATION_MODELS: dict[tuple[str, str], object] = {}
 
 
 class ToolError(RuntimeError):
@@ -95,7 +100,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--format",
         dest="formats",
         action="append",
-        choices=("original", "mkv", "mp3", "txt", "summary"),
+        choices=("original", "mkv", "mp3", "txt", "txt-diarize", "summary"),
         default=None,
         help="Output format. Repeat for multiple outputs. Default: original",
     )
@@ -133,6 +138,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "faster-whisper compute type, e.g. int8, float16, int8_float16. "
             "Default lets faster-whisper choose."
         ),
+    )
+    parser.add_argument(
+        "--diarize",
+        action="store_true",
+        help=(
+            "Enable speaker diarization for transcript output using WhisperX. "
+            "Equivalent to requesting --format txt-diarize."
+        ),
+    )
+    parser.add_argument(
+        "--hf-token",
+        default=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN"),
+        help=(
+            "Hugging Face token used by WhisperX diarization (pyannote). "
+            "Defaults to HF_TOKEN or HUGGINGFACE_TOKEN."
+        ),
+    )
+    parser.add_argument(
+        "--min-speakers",
+        type=int,
+        default=None,
+        help="Optional minimum number of speakers for diarization.",
+    )
+    parser.add_argument(
+        "--max-speakers",
+        type=int,
+        default=None,
+        help="Optional maximum number of speakers for diarization.",
     )
     parser.add_argument(
         "--audio-only",
@@ -463,6 +496,127 @@ def transcribe_with_faster_whisper(
     return target
 
 
+def resolve_device_for_whisperx(device: str) -> str:
+    if device != "auto":
+        return device
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def select_whisperx_compute_type(device: str, compute_type: str) -> str:
+    if compute_type != "default":
+        return compute_type
+
+    preferred = (
+        ("float16", "int8_float16", "int8_float32", "float32", "int8")
+        if device == "cuda"
+        else ("int8", "int8_float32", "int16", "float32")
+    )
+
+    try:
+        import ctranslate2
+
+        supported = ctranslate2.get_supported_compute_types(device)
+    except Exception:
+        return "float16" if device == "cuda" else "int8"
+
+    for candidate in preferred:
+        if candidate in supported:
+            return candidate
+
+    return "float32"
+
+
+def get_whisperx_asr_model(whisperx, model: str, device: str, compute_type: str):
+    cache_key = (model, device, compute_type)
+    if cache_key not in _WHISPERX_ASR_MODELS:
+        _WHISPERX_ASR_MODELS[cache_key] = whisperx.load_model(model, device, compute_type=compute_type)
+    return _WHISPERX_ASR_MODELS[cache_key]
+
+
+def get_whisperx_align_model(whisperx, language: str, device: str):
+    cache_key = (language, device)
+    if cache_key not in _WHISPERX_ALIGN_MODELS:
+        _WHISPERX_ALIGN_MODELS[cache_key] = whisperx.load_align_model(language_code=language, device=device)
+    return _WHISPERX_ALIGN_MODELS[cache_key]
+
+
+def get_whisperx_diarization_model(diarization_pipeline, hf_token: str, device: str):
+    cache_key = (hf_token, device)
+    if cache_key not in _WHISPERX_DIARIZATION_MODELS:
+        _WHISPERX_DIARIZATION_MODELS[cache_key] = diarization_pipeline(token=hf_token, device=device)
+    return _WHISPERX_DIARIZATION_MODELS[cache_key]
+
+
+def transcribe_with_whisperx_diarization(
+    source: Path,
+    output_dir: Path,
+    base_stem: str,
+    model: str | None,
+    language: str | None,
+    device: str,
+    compute_type: str,
+    hf_token: str | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
+) -> Path:
+    if not hf_token:
+        raise ToolError(
+            "WhisperX diarization requires a Hugging Face token. "
+            "Set HF_TOKEN (or HUGGINGFACE_TOKEN), or pass --hf-token."
+        )
+
+    try:
+        import whisperx
+        from whisperx.diarize import DiarizationPipeline
+    except ImportError as exc:  # pragma: no cover - install issue only
+        raise ToolError(
+            "WhisperX is not installed. Install diarization extras with: uv sync --extra diarization"
+        ) from exc
+
+    target = unique_path(output_dir / f"{base_stem}.txt")
+    whisperx_device = resolve_device_for_whisperx(device)
+    whisperx_model = model or DEFAULT_WHISPERX_MODEL
+    whisperx_compute_type = select_whisperx_compute_type(whisperx_device, compute_type)
+
+    audio = whisperx.load_audio(str(source))
+
+    asr_model = get_whisperx_asr_model(whisperx, whisperx_model, whisperx_device, whisperx_compute_type)
+    result = asr_model.transcribe(audio, language=language)
+
+    align_model, metadata = get_whisperx_align_model(whisperx, result["language"], whisperx_device)
+    result = whisperx.align(result["segments"], align_model, metadata, audio, whisperx_device, return_char_alignments=False)
+
+    diarize_model = get_whisperx_diarization_model(DiarizationPipeline, hf_token, whisperx_device)
+    diarize_kwargs: dict[str, int] = {}
+    if min_speakers is not None:
+        diarize_kwargs["min_speakers"] = min_speakers
+    if max_speakers is not None:
+        diarize_kwargs["max_speakers"] = max_speakers
+
+    diarize_segments = diarize_model(audio, **diarize_kwargs)
+    result = whisperx.assign_word_speakers(diarize_segments, result)
+
+    with target.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(f"Title: {base_stem}\n")
+        handle.write(f"Detected language: {result.get('language', 'unknown')}\n")
+        handle.write("Diarization: WhisperX\n")
+        if min_speakers is not None or max_speakers is not None:
+            handle.write(f"Speaker bounds: min={min_speakers}, max={max_speakers}\n")
+        handle.write("\n")
+        for segment in result.get("segments", []):
+            start = format_timestamp(float(segment.get("start", 0.0)))
+            end = format_timestamp(float(segment.get("end", 0.0)))
+            speaker = segment.get("speaker") or "UNKNOWN"
+            text = str(segment.get("text", "")).strip()
+            if text:
+                handle.write(f"[{start} --> {end}] {speaker}: {text}\n")
+    return target
+
+
 def transcribe_to_txt(
     source: Path,
     output_dir: Path,
@@ -471,7 +625,24 @@ def transcribe_to_txt(
     language: str | None,
     device: str,
     compute_type: str,
+    diarize: bool,
+    hf_token: str | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
 ) -> Path:
+    if diarize:
+        return transcribe_with_whisperx_diarization(
+            source,
+            output_dir,
+            base_stem,
+            model,
+            language,
+            device,
+            compute_type,
+            hf_token,
+            min_speakers,
+            max_speakers,
+        )
     backend = select_transcription_backend(model)
     if backend == "whisper-cli":
         return transcribe_with_whisper_cli(source, output_dir, base_stem, language, device)
@@ -546,8 +717,32 @@ def should_remove_source(formats: Iterable[str], keep_intermediate: bool) -> boo
     return not keep_intermediate and "original" not in requested and bool(requested & {"mkv", "mp3", "txt", "summary"})
 
 
+def normalize_formats_and_diarize(formats: list[str] | None, diarize: bool) -> tuple[list[str], bool]:
+    requested = formats or ["original"]
+    diarize_requested = diarize or "txt-diarize" in requested
+    normalized = ["txt" if item == "txt-diarize" else item for item in requested]
+    return normalized, diarize_requested
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.min_speakers is not None and args.min_speakers < 1:
+        raise ToolError("--min-speakers must be >= 1")
+    if args.max_speakers is not None and args.max_speakers < 1:
+        raise ToolError("--max-speakers must be >= 1")
+    if (
+        args.min_speakers is not None
+        and args.max_speakers is not None
+        and args.min_speakers > args.max_speakers
+    ):
+        raise ToolError("--min-speakers cannot be greater than --max-speakers")
+
+    normalized_formats, diarize_requested = normalize_formats_and_diarize(args.formats, args.diarize)
+    if diarize_requested and not any(fmt in {"txt", "summary"} for fmt in normalized_formats):
+        raise ToolError("Diarization requires transcript output. Use --format txt, txt-diarize, or summary.")
+
+
 def build_single_output(args: argparse.Namespace, url: str) -> dict:
-    formats = args.formats or ["original"]
+    formats, diarize_requested = normalize_formats_and_diarize(args.formats, args.diarize)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     needs_audio_only = args.audio_only or set(formats).issubset({"mp3", "txt", "summary"})
@@ -570,6 +765,10 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
             args.language,
             args.device,
             args.compute_type,
+            diarize_requested,
+            args.hf_token,
+            args.min_speakers,
+            args.max_speakers,
         )
         outputs["txt"] = str(txt_path)
         if "summary" in formats:
@@ -591,6 +790,7 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
 
 
 def build_outputs(args: argparse.Namespace) -> dict:
+    validate_args(args)
     playlist = extract_playlist_info(args.url)
     if playlist is None:
         return build_single_output(args, args.url)
@@ -620,6 +820,8 @@ def print_command_help() -> None:
     print('  ytd URL --format mkv            Download and convert/remux to MKV')
     print('  ytd URL --format mp3            Download and convert audio to MP3')
     print('  ytd URL --format txt            Download and transcribe locally to TXT')
+    print('  ytd URL --format txt-diarize    Download and transcribe with speaker diarization')
+    print('  ytd URL --format txt --diarize  Same as: ytd URL --format txt-diarize')
     print('  ytd URL format summary          Save TXT transcript, then stream local Ollama summary')
     print('  ytd URL --format summary        Same as: ytd URL format summary')
     print('  ytd URL --format mkv --format mp3 --format txt')
@@ -631,6 +833,7 @@ def print_command_help() -> None:
     print('  --output-dir PATH               Save files somewhere else')
     print('  --language en                   Hint transcription language')
     print('  --device cpu|cuda|auto          Transcription device')
+    print('  --diarize                       Enable WhisperX speaker diarization')
     print('  --keep-intermediate             Keep downloaded source media')
 
 

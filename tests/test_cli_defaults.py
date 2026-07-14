@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+import types
 
 import pytest
 
 from youtube_downloader import cli
+
+
+@pytest.fixture(autouse=True)
+def clear_whisperx_model_caches():
+    cli._WHISPERX_ASR_MODELS.clear()
+    cli._WHISPERX_ALIGN_MODELS.clear()
+    cli._WHISPERX_DIARIZATION_MODELS.clear()
+    yield
+    cli._WHISPERX_ASR_MODELS.clear()
+    cli._WHISPERX_ALIGN_MODELS.clear()
+    cli._WHISPERX_DIARIZATION_MODELS.clear()
 
 
 def test_resolve_whisper_model_prefers_explicit_model():
@@ -60,6 +73,10 @@ def test_transcribe_error_mentions_global_whisper_when_no_backend(monkeypatch, t
             language=None,
             device="cpu",
             compute_type="default",
+            diarize=False,
+            hf_token=None,
+            min_speakers=None,
+            max_speakers=None,
         )
     message = str(excinfo.value)
     assert "global whisper command" in message
@@ -85,6 +102,8 @@ def test_format_summary_alias_is_normalized():
 
 
 def test_summary_format_creates_txt_and_streams_summary(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
     source = tmp_path / "source.mp4"
     source.write_bytes(b"fake media")
     transcript = tmp_path / "downloads" / "Example [abc123].txt"
@@ -95,8 +114,24 @@ def test_summary_format_creates_txt_and_streams_summary(monkeypatch, tmp_path, c
         lambda url, output_dir, audio_only: cli.DownloadedMedia(source, "Example", "abc123", url),
     )
 
-    def fake_transcribe(source, output_dir, base_stem, model, language, device, compute_type):
+    def fake_transcribe(
+        source,
+        output_dir,
+        base_stem,
+        model,
+        language,
+        device,
+        compute_type,
+        diarize,
+        hf_token,
+        min_speakers,
+        max_speakers,
+    ):
         output_dir.mkdir(parents=True, exist_ok=True)
+        assert diarize is False
+        assert hf_token is None
+        assert min_speakers is None
+        assert max_speakers is None
         transcript.write_text("This is a local transcript about useful SEO tactics.", encoding="utf-8")
         return transcript
 
@@ -109,6 +144,148 @@ def test_summary_format_creates_txt_and_streams_summary(monkeypatch, tmp_path, c
     assert result["outputs"]["txt"] == str(transcript)
     assert result["outputs"]["summary"] == "streamed-to-terminal"
     assert "SUMMARY: useful SEO tactics" in capsys.readouterr().out
+
+
+def test_parse_args_accepts_txt_diarize_and_hf_token(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    args = cli.parse_args([
+        "https://example.com/video",
+        "--format",
+        "txt-diarize",
+        "--hf-token",
+        "token-123",
+        "--min-speakers",
+        "2",
+        "--max-speakers",
+        "5",
+    ])
+
+    assert args.formats == ["txt-diarize"]
+    assert args.diarize is False
+    assert args.hf_token == "token-123"
+    assert args.min_speakers == 2
+    assert args.max_speakers == 5
+
+
+def test_normalize_formats_and_diarize_supports_alias_and_flag():
+    normalized, diarize_requested = cli.normalize_formats_and_diarize(["txt-diarize", "mp3"], False)
+    assert normalized == ["txt", "mp3"]
+    assert diarize_requested is True
+
+    normalized2, diarize_requested2 = cli.normalize_formats_and_diarize(["txt"], True)
+    assert normalized2 == ["txt"]
+    assert diarize_requested2 is True
+
+
+def test_validate_args_rejects_diarize_without_transcript_output(tmp_path):
+    args = cli.parse_args([
+        "https://example.com/video",
+        "--format",
+        "mp3",
+        "--diarize",
+        "--output-dir",
+        str(tmp_path),
+    ])
+
+    with pytest.raises(cli.ToolError) as excinfo:
+        cli.validate_args(args)
+    assert "Diarization requires transcript output" in str(excinfo.value)
+
+
+def test_select_whisperx_compute_type_uses_best_supported_cuda_type(monkeypatch):
+    fake_ctranslate2 = types.ModuleType("ctranslate2")
+    fake_ctranslate2.get_supported_compute_types = lambda device: {"float32", "int8", "int8_float32"}
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ctranslate2)
+
+    assert cli.select_whisperx_compute_type("cuda", "default") == "int8_float32"
+
+
+def test_select_whisperx_compute_type_keeps_explicit_choice(monkeypatch):
+    fake_ctranslate2 = types.ModuleType("ctranslate2")
+    fake_ctranslate2.get_supported_compute_types = lambda device: {"int8"}
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ctranslate2)
+
+    assert cli.select_whisperx_compute_type("cuda", "float32") == "float32"
+
+
+def test_transcribe_with_whisperx_uses_current_diarization_api_and_caches_models(monkeypatch, tmp_path):
+    calls = {"asr": 0, "align": 0, "diarize": 0}
+
+    class FakeAsrModel:
+        def transcribe(self, audio, language=None):
+            assert audio == "AUDIO"
+            assert language == "en"
+            return {
+                "language": "en",
+                "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            }
+
+    fake_whisperx = types.ModuleType("whisperx")
+    fake_whisperx.load_audio = lambda path: "AUDIO"
+
+    def fake_load_model(model, device, compute_type=None):
+        calls["asr"] += 1
+        assert model == cli.DEFAULT_WHISPERX_MODEL
+        assert device == "cpu"
+        assert compute_type == "int8"
+        return FakeAsrModel()
+
+    fake_whisperx.load_model = fake_load_model
+
+    def fake_load_align_model(language_code, device):
+        calls["align"] += 1
+        assert language_code == "en"
+        assert device == "cpu"
+        return "ALIGN", {"language": language_code}
+
+    fake_whisperx.load_align_model = fake_load_align_model
+    fake_whisperx.align = lambda segments, align_model, metadata, audio, device, return_char_alignments=False: {
+        "language": metadata["language"],
+        "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+    }
+    fake_whisperx.assign_word_speakers = lambda diarization, result: {
+        "language": result["language"],
+        "segments": [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00", "text": "hello"}],
+    }
+
+    fake_diarize = types.ModuleType("whisperx.diarize")
+
+    class FakeDiarizationPipeline:
+        def __init__(self, token=None, device="cpu"):
+            calls["diarize"] += 1
+            assert token == "hf_fake"
+            assert device == "cpu"
+
+        def __call__(self, audio, **kwargs):
+            assert audio == "AUDIO"
+            assert kwargs == {"min_speakers": 1, "max_speakers": 2}
+            return "DIARIZATION"
+
+    fake_diarize.DiarizationPipeline = FakeDiarizationPipeline
+    monkeypatch.setitem(sys.modules, "whisperx", fake_whisperx)
+    monkeypatch.setitem(sys.modules, "whisperx.diarize", fake_diarize)
+
+    source = tmp_path / "source.webm"
+    source.write_bytes(b"fake")
+    for idx in range(2):
+        transcript = cli.transcribe_with_whisperx_diarization(
+            source=source,
+            output_dir=tmp_path,
+            base_stem=f"demo-{idx}",
+            model=None,
+            language="en",
+            device="cpu",
+            compute_type="default",
+            hf_token="hf_fake",
+            min_speakers=1,
+            max_speakers=2,
+        )
+
+        text = transcript.read_text(encoding="utf-8")
+        assert "Diarization: WhisperX" in text
+        assert "SPEAKER_00: hello" in text
+
+    assert calls == {"asr": 1, "align": 1, "diarize": 1}
 
 
 def test_is_playlist_url_detects_youtube_playlist():
