@@ -200,6 +200,36 @@ def require_command(name: str) -> str:
     return exe
 
 
+def find_js_runtime() -> dict[str, dict[str, str]]:
+    """Return a yt-dlp js_runtimes config using a local JavaScript runtime if present."""
+    candidates = [
+        ("node", shutil.which("node")),
+        ("deno", shutil.which("deno")),
+        ("bun", shutil.which("bun")),
+    ]
+    if os.name == "nt":
+        candidates.extend(
+            [
+                ("node", str(Path.home() / "AppData" / "Local" / "hermes" / "node" / "node.exe")),
+                ("node", "C:/Program Files/nodejs/node.exe"),
+                ("deno", str(Path.home() / ".deno" / "bin" / "deno.exe")),
+            ]
+        )
+
+    for name, exe in candidates:
+        if exe and Path(exe).exists():
+            return {name: {"path": str(Path(exe))}}
+    return {}
+
+
+def youtube_dl_base_options() -> dict:
+    opts: dict = {}
+    js_runtime = find_js_runtime()
+    if js_runtime:
+        opts["js_runtimes"] = js_runtime
+    return opts
+
+
 def run(cmd: list[str]) -> None:
     proc = subprocess.run(cmd, text=True)
     if proc.returncode != 0:
@@ -249,6 +279,7 @@ def download_youtube(url: str, output_dir: Path, audio_only: bool) -> Downloaded
     before = {p.resolve() for p in output_dir.glob("**/*") if p.is_file()}
     fmt = "bestaudio/best" if audio_only else "bv*+ba/best"
     ydl_opts = {
+        **youtube_dl_base_options(),
         "format": fmt,
         "outtmpl": str(output_dir / "%(title).150B [%(id)s].%(ext)s"),
         "restrictfilenames": False,
@@ -282,6 +313,7 @@ def extract_playlist_info(url: str) -> PlaylistInfo | None:
         return None
 
     ydl_opts = {
+        **youtube_dl_base_options(),
         "extract_flat": True,
         "skip_download": True,
         "noplaylist": False,
