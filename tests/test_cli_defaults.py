@@ -249,6 +249,35 @@ def test_build_single_output_removes_source_when_output_step_fails(monkeypatch, 
     assert not source.exists()
 
 
+def test_build_outputs_retries_playlist_items_after_403(monkeypatch):
+    playlist = cli.PlaylistInfo(
+        source_url="https://example.com/playlist",
+        title="Demo Playlist",
+        video_urls=["https://example.com/video-1"],
+    )
+    monkeypatch.setattr(cli, "extract_playlist_info", lambda url: playlist)
+
+    sleep_calls: list[int] = []
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleep_calls.append(int(seconds)))
+
+    attempts = {"count": 0}
+
+    def fake_build_single_output(args, url):
+        attempts["count"] += 1
+        if attempts["count"] in {1, 2}:
+            raise cli.ToolError("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        return {"title": "Recovered", "video_id": "abc123", "url": url, "outputs": {}}
+
+    monkeypatch.setattr(cli, "build_single_output", fake_build_single_output)
+
+    args = cli.parse_args(["https://example.com/playlist"])
+    result = cli.build_outputs(args)
+
+    assert attempts["count"] == 3
+    assert sleep_calls == [60, 120]
+    assert result["items"][0]["title"] == "Recovered"
+
+
 def test_select_whisperx_compute_type_uses_best_supported_cuda_type(monkeypatch):
     fake_ctranslate2 = types.ModuleType("ctranslate2")
     fake_ctranslate2.get_supported_compute_types = lambda device: {"float32", "int8", "int8_float32"}

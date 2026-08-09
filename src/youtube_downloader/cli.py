@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -822,37 +823,45 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
     base_stem = safe_stem(f"{media.title} [{media.video_id}]")
 
     outputs: dict[str, str] = {}
-    if "original" in formats:
-        outputs["original"] = str(media.source_path)
-    if "mkv" in formats:
-        outputs["mkv"] = str(convert_to_mkv(media.source_path, args.output_dir, base_stem))
-    if "mp3" in formats:
-        outputs["mp3"] = str(convert_to_mp3(media.source_path, args.output_dir, base_stem))
-    if "txt" in formats or "summary" in formats:
-        txt_path = transcribe_to_txt(
-            media.source_path,
-            args.output_dir,
-            base_stem,
-            args.model,
-            args.language,
-            args.device,
-            args.compute_type,
-            diarize_requested,
-            args.hf_token,
-            args.min_speakers,
-            args.max_speakers,
-            args.collapse,
-        )
-        outputs["txt"] = str(txt_path)
-        if "summary" in formats:
-            stream_ollama_summary(txt_path, args.ollama_model)
-            outputs["summary"] = "streamed-to-terminal"
+    try:
+        if "original" in formats:
+            outputs["original"] = str(media.source_path)
+        if "mkv" in formats:
+            outputs["mkv"] = str(convert_to_mkv(media.source_path, args.output_dir, base_stem))
+        if "mp3" in formats:
+            outputs["mp3"] = str(convert_to_mp3(media.source_path, args.output_dir, base_stem))
+        if "txt" in formats or "summary" in formats:
+            txt_path = transcribe_to_txt(
+                media.source_path,
+                args.output_dir,
+                base_stem,
+                args.model,
+                args.language,
+                args.device,
+                args.compute_type,
+                diarize_requested,
+                args.hf_token,
+                args.min_speakers,
+                args.max_speakers,
+                args.collapse,
+            )
+            outputs["txt"] = str(txt_path)
+            if "summary" in formats:
+                stream_ollama_summary(txt_path, args.ollama_model)
+                outputs["summary"] = "streamed-to-terminal"
 
-    if should_remove_source(formats, args.keep_intermediate):
-        try:
-            media.source_path.unlink()
-        except OSError:
-            pass
+        if should_remove_source(formats, args.keep_intermediate):
+            try:
+                media.source_path.unlink()
+            except OSError:
+                pass
+    except Exception:
+        if should_remove_source(formats, args.keep_intermediate):
+            try:
+                media.source_path.unlink()
+            except OSError:
+                pass
+        raise
 
     return {
         "title": media.title,
@@ -860,6 +869,11 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
         "url": media.webpage_url,
         "outputs": outputs,
     }
+
+
+def is_playlist_retry_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return "unable to download video data" in message and ("403" in message or "forbidden" in message)
 
 
 def build_outputs(args: argparse.Namespace) -> dict:
@@ -872,7 +886,21 @@ def build_outputs(args: argparse.Namespace) -> dict:
     total = len(playlist.video_urls)
     for idx, video_url in enumerate(playlist.video_urls, start=1):
         print(f"[{idx}/{total}] Processing: {video_url}")
-        item_result = build_single_output(args, video_url)
+        attempt = 0
+        while True:
+            try:
+                item_result = build_single_output(args, video_url)
+                break
+            except Exception as exc:
+                if not is_playlist_retry_error(exc):
+                    raise
+
+                attempt += 1
+                wait_seconds = 60 * attempt
+                print(f"Transient download error for {video_url}: {exc}", file=sys.stderr)
+                print(f"Waiting {wait_seconds} seconds before retrying this playlist item...", file=sys.stderr)
+                time.sleep(wait_seconds)
+
         items.append(item_result)
 
     return {
