@@ -126,6 +126,7 @@ def test_summary_format_creates_txt_and_streams_summary(monkeypatch, tmp_path, c
         hf_token,
         min_speakers,
         max_speakers,
+        collapse,
     ):
         output_dir.mkdir(parents=True, exist_ok=True)
         assert diarize is False
@@ -167,6 +168,25 @@ def test_parse_args_accepts_txt_diarize_and_hf_token(monkeypatch):
     assert args.max_speakers == 5
 
 
+def test_parse_args_accepts_optional_collapse_flag():
+    args = cli.parse_args([
+        "https://example.com/video",
+        "--collapse",
+    ])
+
+    assert args.collapse is True
+
+
+def test_help_uses_invoked_command_name(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "argv", ["ytd"])
+
+    with pytest.raises(SystemExit):
+        cli.parse_args(["--help"])
+
+    output = capsys.readouterr().out
+    assert "usage: ytd" in output
+
+
 def test_normalize_formats_and_diarize_supports_alias_and_flag():
     normalized, diarize_requested = cli.normalize_formats_and_diarize(["txt-diarize", "mp3"], False)
     assert normalized == ["txt", "mp3"]
@@ -190,6 +210,43 @@ def test_validate_args_rejects_diarize_without_transcript_output(tmp_path):
     with pytest.raises(cli.ToolError) as excinfo:
         cli.validate_args(args)
     assert "Diarization requires transcript output" in str(excinfo.value)
+
+
+def test_build_single_output_removes_source_when_output_step_fails(monkeypatch, tmp_path):
+    source = tmp_path / "source.webm"
+    source.write_bytes(b"fake")
+
+    monkeypatch.setattr(
+        cli,
+        "download_youtube",
+        lambda url, output_dir, audio_only: cli.DownloadedMedia(source, "Demo", "abc123", url),
+    )
+    monkeypatch.setattr(cli, "convert_to_mkv", lambda *args, **kwargs: tmp_path / "out.mkv")
+    monkeypatch.setattr(cli, "convert_to_mp3", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(cli, "transcribe_to_txt", lambda *args, **kwargs: tmp_path / "out.txt")
+    monkeypatch.setattr(cli, "stream_ollama_summary", lambda *args, **kwargs: None)
+
+    args = types.SimpleNamespace(
+        formats=["mp3"],
+        diarize=False,
+        output_dir=tmp_path,
+        keep_intermediate=False,
+        model=None,
+        language=None,
+        device="cpu",
+        compute_type="default",
+        hf_token=None,
+        min_speakers=None,
+        max_speakers=None,
+        collapse=False,
+        audio_only=False,
+        ollama_model="llama3.1:8b",
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        cli.build_single_output(args, "https://example.com/video")
+
+    assert not source.exists()
 
 
 def test_select_whisperx_compute_type_uses_best_supported_cuda_type(monkeypatch):
@@ -220,7 +277,7 @@ def test_collapse_diarized_segments_merges_adjacent_speaker_lines():
         {"start": 143.000, "speaker": "SPEAKER_01", "text": "New speaker."},
         {"start": 144.000, "speaker": "SPEAKER_01", "text": "More text."},
         {"start": 145.000, "speaker": "SPEAKER_00", "text": "Back again."},
-    ])
+    ], collapse=True)
 
     assert collapsed == [
         {"start": 137.633, "speaker": "SPEAKER_00", "text": "Hello world."},
@@ -306,6 +363,7 @@ def test_transcribe_with_whisperx_uses_current_diarization_api_and_caches_models
             hf_token="hf_fake",
             min_speakers=1,
             max_speakers=2,
+            collapse=True,
         )
 
         text = transcript.read_text(encoding="utf-8")

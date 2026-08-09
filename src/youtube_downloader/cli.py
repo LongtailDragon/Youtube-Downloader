@@ -87,8 +87,9 @@ def normalize_argv(argv: list[str] | None) -> list[str] | None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     argv = normalize_argv(argv)
+    invoked_name = Path(sys.argv[0]).stem.replace(".exe", "") or "ytd"
     parser = argparse.ArgumentParser(
-        prog="ytdl-local",
+        prog=invoked_name,
         description=(
             "Download a YouTube URL and optionally convert it to MKV, MP3, "
             "or transcribe it to TXT using local tools."
@@ -146,6 +147,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Enable speaker diarization for transcript output using WhisperX. "
             "Equivalent to requesting --format txt-diarize."
         ),
+    )
+    parser.add_argument(
+        "--collapse",
+        action="store_true",
+        help="Collapse adjacent diarized lines from the same speaker into a single line in the transcript output.",
     )
     parser.add_argument(
         "--hf-token",
@@ -594,6 +600,7 @@ def transcribe_with_whisperx_diarization(
     hf_token: str | None,
     min_speakers: int | None,
     max_speakers: int | None,
+    collapse: bool = False,
 ) -> Path:
     if not hf_token:
         raise ToolError(
@@ -606,7 +613,8 @@ def transcribe_with_whisperx_diarization(
         from whisperx.diarize import DiarizationPipeline
     except ImportError as exc:  # pragma: no cover - install issue only
         raise ToolError(
-            "WhisperX is not installed. Install diarization extras with: uv sync --extra diarization"
+            "WhisperX is not installed. Reinstall the project with its default dependencies, for example: "
+            "uv tool install --editable . --force"
         ) from exc
 
     target = unique_path(output_dir / f"{base_stem}.txt")
@@ -639,7 +647,10 @@ def transcribe_with_whisperx_diarization(
         if min_speakers is not None or max_speakers is not None:
             handle.write(f"Speaker bounds: min={min_speakers}, max={max_speakers}\n")
         handle.write("\n")
-        collapsed_segments = collapse_diarized_segments(result.get("segments", []))
+        collapsed_segments = collapse_diarized_segments(
+            result.get("segments", []),
+            collapse=collapse,
+        )
         for segment in collapsed_segments:
             start = format_timestamp_seconds(float(segment["start"]))
             speaker = str(segment["speaker"])
@@ -660,6 +671,7 @@ def transcribe_to_txt(
     hf_token: str | None,
     min_speakers: int | None,
     max_speakers: int | None,
+    collapse: bool = False,
 ) -> Path:
     if diarize:
         return transcribe_with_whisperx_diarization(
@@ -673,6 +685,7 @@ def transcribe_to_txt(
             hf_token,
             min_speakers,
             max_speakers,
+            collapse,
         )
     backend = select_transcription_backend(model)
     if backend == "whisper-cli":
@@ -750,7 +763,10 @@ def format_timestamp_seconds(seconds: float) -> str:
     h = total_minutes // 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-def collapse_diarized_segments(segments: list[dict]) -> list[dict[str, str | float]]:
+def collapse_diarized_segments(
+    segments: list[dict],
+    collapse: bool = False,
+) -> list[dict[str, str | float]]:
     collapsed: list[dict[str, str | float]] = []
     for segment in segments:
         speaker = str(segment.get("speaker") or "UNKNOWN")
@@ -759,7 +775,7 @@ def collapse_diarized_segments(segments: list[dict]) -> list[dict[str, str | flo
             continue
 
         start = float(segment.get("start", 0.0))
-        if collapsed and collapsed[-1]["speaker"] == speaker:
+        if collapse and collapsed and collapsed[-1]["speaker"] == speaker:
             prev_text = str(collapsed[-1]["text"])
             collapsed[-1]["text"] = f"{prev_text} {text}".strip()
             continue
@@ -825,6 +841,7 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
             args.hf_token,
             args.min_speakers,
             args.max_speakers,
+            args.collapse,
         )
         outputs["txt"] = str(txt_path)
         if "summary" in formats:
@@ -878,6 +895,7 @@ def print_command_help() -> None:
     print('  ytd URL --format txt            Download and transcribe locally to TXT')
     print('  ytd URL --format txt-diarize    Download and transcribe with speaker diarization')
     print('  ytd URL --format txt --diarize  Same as: ytd URL --format txt-diarize')
+    print('  ytd URL --format txt --diarize --collapse  Collapse adjacent same-speaker diarized lines')
     print('  ytd URL format summary          Save TXT transcript, then stream local Ollama summary')
     print('  ytd URL --format summary        Same as: ytd URL format summary')
     print('  ytd URL --format mkv --format mp3 --format txt')
@@ -890,6 +908,7 @@ def print_command_help() -> None:
     print('  --language en                   Hint transcription language')
     print('  --device cpu|cuda|auto          Transcription device')
     print('  --diarize                       Enable WhisperX speaker diarization')
+    print('  --collapse                      Collapse adjacent same-speaker diarized lines')
     print('  --keep-intermediate             Keep downloaded source media')
 
 

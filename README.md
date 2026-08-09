@@ -80,7 +80,21 @@ uv sync
 3. Optional but recommended: install the global `ytd` command:
 
 ```bash
-uv tool install --editable . --force
+uv tool install . --force
+```
+
+This installs the full CLI with its default transcription and diarization dependencies, so you do not need an additional `--extra diarization` step. The standard install also brings in the Whisper CLI backend for the default TXT transcription flow.
+
+If you are setting this up on a fresh Windows machine, make sure your PATH includes the user-local bin directory that `uv` uses for tool installs. A typical location is:
+
+```text
+C:\Users\<you>\.local\bin
+```
+
+After installation, open a new terminal and verify:
+
+```powershell
+ytd --help
 ```
 
 4. Verify CLI install:
@@ -159,10 +173,10 @@ ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format summary
 
 ### WhisperX Diarization (speaker detection)
 
-Install diarization dependencies:
+If you are installing from source, the standard project install already includes diarization support:
 
 ```bash
-uv sync --extra diarization
+uv sync
 ```
 
 Optional performance boost for model downloads:
@@ -261,6 +275,12 @@ Optional speaker bounds:
 ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format txt --diarize --min-speakers 2 --max-speakers 4
 ```
 
+Optionally collapse adjacent lines from the same speaker into a single transcript line:
+
+```bash
+ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format txt --diarize --collapse
+```
+
 ## Usage
 
 Show short help:
@@ -345,6 +365,7 @@ sh run-ytdl-local.sh "https://www.youtube.com/watch?v=VIDEO_ID" --format mp3
 --device cpu|cuda|auto                Transcription device
 --compute-type default|int8|float16   faster-whisper compute type
 --diarize                             Enable WhisperX speaker diarization for transcript output
+--collapse                           Collapse adjacent same-speaker diarized lines
 --hf-token TOKEN                      Hugging Face token for WhisperX diarization
 --min-speakers N                      Optional minimum number of speakers
 --max-speakers N                      Optional maximum number of speakers
