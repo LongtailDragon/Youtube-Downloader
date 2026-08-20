@@ -111,7 +111,7 @@ def test_summary_format_creates_txt_and_streams_summary(monkeypatch, tmp_path, c
     monkeypatch.setattr(
         cli,
         "download_youtube",
-        lambda url, output_dir, audio_only: cli.DownloadedMedia(source, "Example", "abc123", url),
+        lambda url, output_dir, audio_only: cli.DownloadedMedia(source, "Example", "abc123", url, "2026-08-19T12:34:56Z"),
     )
 
     def fake_transcribe(
@@ -127,12 +127,18 @@ def test_summary_format_creates_txt_and_streams_summary(monkeypatch, tmp_path, c
         min_speakers,
         max_speakers,
         collapse,
+        video_url,
+        published_datetime,
+        metadata_title,
     ):
         output_dir.mkdir(parents=True, exist_ok=True)
         assert diarize is False
         assert hf_token is None
         assert min_speakers is None
         assert max_speakers is None
+        assert video_url == "https://example.com/video"
+        assert published_datetime == "2026-08-19T12:34:56Z"
+        assert metadata_title == "Example"
         transcript.write_text("This is a local transcript about useful SEO tactics.", encoding="utf-8")
         return transcript
 
@@ -219,7 +225,7 @@ def test_build_single_output_removes_source_when_output_step_fails(monkeypatch, 
     monkeypatch.setattr(
         cli,
         "download_youtube",
-        lambda url, output_dir, audio_only: cli.DownloadedMedia(source, "Demo", "abc123", url),
+        lambda url, output_dir, audio_only: cli.DownloadedMedia(source, "Demo", "abc123", url, "2026-08-19T12:34:56Z"),
     )
     monkeypatch.setattr(cli, "convert_to_mkv", lambda *args, **kwargs: tmp_path / "out.mkv")
     monkeypatch.setattr(cli, "convert_to_mp3", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -247,6 +253,33 @@ def test_build_single_output_removes_source_when_output_step_fails(monkeypatch, 
         cli.build_single_output(args, "https://example.com/video")
 
     assert not source.exists()
+
+
+def test_download_youtube_audio_only_retries_403_with_android_client(monkeypatch, tmp_path):
+    calls: list[dict] = []
+
+    def fake_extract_downloaded_youtube(url, ydl_opts):
+        calls.append(ydl_opts)
+        if len(calls) == 1:
+            raise cli.ToolError("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        downloaded = tmp_path / "Recovered [abc123].mp4"
+        downloaded.write_bytes(b"fake media")
+        return {
+            "title": "Recovered",
+            "id": "abc123",
+            "webpage_url": url,
+            "requested_downloads": [{"filepath": str(downloaded)}],
+        }
+
+    monkeypatch.setattr(cli, "extract_downloaded_youtube", fake_extract_downloaded_youtube)
+
+    media = cli.download_youtube("https://example.com/video", tmp_path, audio_only=True)
+
+    assert media.title == "Recovered"
+    assert media.source_path.name == "Recovered [abc123].mp4"
+    assert calls[0]["format"] == "bestaudio/best"
+    assert calls[1]["format"] == "18/best"
+    assert calls[1]["extractor_args"] == {"youtube": {"player_client": ["android"]}}
 
 
 def test_build_outputs_retries_playlist_items_after_403(monkeypatch):
@@ -292,6 +325,12 @@ def test_select_whisperx_compute_type_keeps_explicit_choice(monkeypatch):
     monkeypatch.setitem(sys.modules, "ctranslate2", fake_ctranslate2)
 
     assert cli.select_whisperx_compute_type("cuda", "float32") == "float32"
+
+
+def test_format_published_datetime_prefers_timestamp_and_falls_back_to_upload_date():
+    assert cli.format_published_datetime({"timestamp": 1787135696}) == "2026-08-19T10:34:56Z"
+    assert cli.format_published_datetime({"upload_date": "20260819"}) == "2026-08-19"
+    assert cli.format_published_datetime({}) == "unknown"
 
 
 def test_format_timestamp_seconds_truncates_subsecond_precision():
@@ -393,9 +432,16 @@ def test_transcribe_with_whisperx_uses_current_diarization_api_and_caches_models
             min_speakers=1,
             max_speakers=2,
             collapse=True,
+            video_url="https://www.youtube.com/watch?v=abc123",
+            published_datetime="2026-08-19T12:34:56Z",
+            metadata_title="What happened when FL gave $8,000 to families who left government schools",
         )
 
         text = transcript.read_text(encoding="utf-8")
+        assert "Title: What happened when FL gave $8,000 to families who left government schools\n" in text
+        assert "_8_000" not in text
+        assert "Video URL: https://www.youtube.com/watch?v=abc123" in text
+        assert "Published datetime: 2026-08-19T12:34:56Z" in text
         assert "Diarization: WhisperX" in text
         assert "[00:02:17] SPEAKER_00: hello again" in text
         assert "-->" not in text

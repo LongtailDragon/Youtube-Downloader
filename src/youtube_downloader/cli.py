@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, urlparse
@@ -66,6 +67,7 @@ class DownloadedMedia:
     title: str
     video_id: str
     webpage_url: str
+    published_datetime: str
 
 
 @dataclass(frozen=True)
@@ -262,6 +264,48 @@ def unique_path(path: Path) -> Path:
     raise ToolError(f"Could not find unused filename for {path}")
 
 
+def format_published_datetime(info: dict) -> str:
+    timestamp = info.get("timestamp") or info.get("release_timestamp")
+    if timestamp is not None:
+        try:
+            return datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        except (TypeError, ValueError, OSError):
+            pass
+
+    upload_date = info.get("upload_date") or info.get("release_date")
+    if isinstance(upload_date, str) and len(upload_date) == 8 and upload_date.isdigit():
+        try:
+            return datetime.strptime(upload_date, "%Y%m%d").date().isoformat()
+        except ValueError:
+            pass
+
+    return "unknown"
+
+
+def write_transcript_metadata(
+    handle,
+    title: str,
+    *,
+    video_url: str = "unknown",
+    published_datetime: str = "unknown",
+    detected_language: str | None = None,
+    diarization: str | None = None,
+    speaker_bounds: tuple[int | None, int | None] | None = None,
+) -> None:
+    handle.write(f"Title: {title}\n")
+    handle.write(f"Video URL: {video_url or 'unknown'}\n")
+    handle.write(f"Published datetime: {published_datetime or 'unknown'}\n")
+    if detected_language is not None:
+        handle.write(f"Detected language: {detected_language}\n")
+    if diarization is not None:
+        handle.write(f"Diarization: {diarization}\n")
+    if speaker_bounds is not None:
+        min_speakers, max_speakers = speaker_bounds
+        if min_speakers is not None or max_speakers is not None:
+            handle.write(f"Speaker bounds: min={min_speakers}, max={max_speakers}\n")
+    handle.write("\n")
+
+
 def find_downloaded_file(info: dict, before: set[Path], download_dir: Path) -> Path:
     requested = info.get("requested_downloads") or []
     for item in requested:
@@ -281,11 +325,8 @@ def find_downloaded_file(info: dict, before: set[Path], download_dir: Path) -> P
     raise ToolError("Download finished, but the downloaded file could not be located.")
 
 
-def download_youtube(url: str, output_dir: Path, audio_only: bool) -> DownloadedMedia:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    before = {p.resolve() for p in output_dir.glob("**/*") if p.is_file()}
-    fmt = "bestaudio/best" if audio_only else "bv*+ba/best"
-    ydl_opts = {
+def make_youtube_download_options(output_dir: Path, fmt: str, *, android_client: bool = False) -> dict:
+    opts = {
         **youtube_dl_base_options(),
         "format": fmt,
         "outtmpl": str(output_dir / "%(title).150B [%(id)s].%(ext)s"),
@@ -296,14 +337,39 @@ def download_youtube(url: str, output_dir: Path, audio_only: bool) -> Downloaded
         "quiet": False,
         "no_warnings": False,
     }
+    if android_client:
+        opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+    return opts
+
+
+def extract_downloaded_youtube(url: str, ydl_opts: dict) -> dict:
     with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+        return ydl.extract_info(url, download=True)
+
+
+def download_youtube(url: str, output_dir: Path, audio_only: bool) -> DownloadedMedia:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    before = {p.resolve() for p in output_dir.glob("**/*") if p.is_file()}
+    fmt = "bestaudio/best" if audio_only else "bv*+ba/best"
+    ydl_opts = make_youtube_download_options(output_dir, fmt)
+    try:
+        info = extract_downloaded_youtube(url, ydl_opts)
+    except Exception as exc:
+        if not audio_only or not is_download_403_error(exc):
+            raise
+        print(
+            "Audio-only download hit YouTube 403; retrying with the Android client fallback...",
+            file=sys.stderr,
+        )
+        fallback_opts = make_youtube_download_options(output_dir, "18/best", android_client=True)
+        info = extract_downloaded_youtube(url, fallback_opts)
     source = find_downloaded_file(info, before, output_dir)
     return DownloadedMedia(
         source_path=source,
         title=info.get("title") or source.stem,
         video_id=info.get("id") or "unknown-id",
         webpage_url=info.get("webpage_url") or url,
+        published_datetime=format_published_datetime(info),
     )
 
 
@@ -458,6 +524,9 @@ def transcribe_with_whisper_cli(
     base_stem: str,
     language: str | None,
     device: str,
+    video_url: str = "unknown",
+    published_datetime: str = "unknown",
+    metadata_title: str | None = None,
 ) -> Path:
     whisper_exe = require_command("whisper")
     target = unique_path(output_dir / f"{base_stem}.txt")
@@ -491,7 +560,16 @@ def transcribe_with_whisper_cli(
             if not txt_outputs:
                 raise ToolError("Global whisper command finished, but no TXT output was created.")
             generated = txt_outputs[0]
-        shutil.copy2(generated, target)
+        transcript_body = generated.read_text(encoding="utf-8", errors="replace")
+        with target.open("w", encoding="utf-8", newline="\n") as handle:
+            write_transcript_metadata(
+                handle,
+                metadata_title or base_stem,
+                video_url=video_url,
+                published_datetime=published_datetime,
+                detected_language=language or "unknown",
+            )
+            handle.write(transcript_body)
     finally:
         shutil.rmtree(wav.parent, ignore_errors=True)
         shutil.rmtree(whisper_output_dir, ignore_errors=True)
@@ -506,6 +584,9 @@ def transcribe_with_faster_whisper(
     language: str | None,
     device: str,
     compute_type: str,
+    video_url: str = "unknown",
+    published_datetime: str = "unknown",
+    metadata_title: str | None = None,
 ) -> Path:
     model = resolve_whisper_model(model)
 
@@ -523,9 +604,13 @@ def transcribe_with_faster_whisper(
         whisper = WhisperModel(model, **kwargs)
         segments, info = whisper.transcribe(str(wav), language=language, vad_filter=True)
         with target.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(f"Title: {base_stem}\n")
-            handle.write(f"Detected language: {info.language} ({info.language_probability:.2f})\n")
-            handle.write("\n")
+            write_transcript_metadata(
+                handle,
+                metadata_title or base_stem,
+                video_url=video_url,
+                published_datetime=published_datetime,
+                detected_language=f"{info.language} ({info.language_probability:.2f})",
+            )
             for segment in segments:
                 start = format_timestamp(segment.start)
                 end = format_timestamp(segment.end)
@@ -602,6 +687,9 @@ def transcribe_with_whisperx_diarization(
     min_speakers: int | None,
     max_speakers: int | None,
     collapse: bool = False,
+    video_url: str = "unknown",
+    published_datetime: str = "unknown",
+    metadata_title: str | None = None,
 ) -> Path:
     if not hf_token:
         raise ToolError(
@@ -642,12 +730,15 @@ def transcribe_with_whisperx_diarization(
     result = whisperx.assign_word_speakers(diarize_segments, result)
 
     with target.open("w", encoding="utf-8", newline="\n") as handle:
-        handle.write(f"Title: {base_stem}\n")
-        handle.write(f"Detected language: {result.get('language', 'unknown')}\n")
-        handle.write("Diarization: WhisperX\n")
-        if min_speakers is not None or max_speakers is not None:
-            handle.write(f"Speaker bounds: min={min_speakers}, max={max_speakers}\n")
-        handle.write("\n")
+        write_transcript_metadata(
+            handle,
+            metadata_title or base_stem,
+            video_url=video_url,
+            published_datetime=published_datetime,
+            detected_language=str(result.get("language", "unknown")),
+            diarization="WhisperX",
+            speaker_bounds=(min_speakers, max_speakers),
+        )
         collapsed_segments = collapse_diarized_segments(
             result.get("segments", []),
             collapse=collapse,
@@ -673,6 +764,9 @@ def transcribe_to_txt(
     min_speakers: int | None,
     max_speakers: int | None,
     collapse: bool = False,
+    video_url: str = "unknown",
+    published_datetime: str = "unknown",
+    metadata_title: str | None = None,
 ) -> Path:
     if diarize:
         return transcribe_with_whisperx_diarization(
@@ -687,11 +781,34 @@ def transcribe_to_txt(
             min_speakers,
             max_speakers,
             collapse,
+            video_url,
+            published_datetime,
+            metadata_title,
         )
     backend = select_transcription_backend(model)
     if backend == "whisper-cli":
-        return transcribe_with_whisper_cli(source, output_dir, base_stem, language, device)
-    return transcribe_with_faster_whisper(source, output_dir, base_stem, model, language, device, compute_type)
+        return transcribe_with_whisper_cli(
+            source,
+            output_dir,
+            base_stem,
+            language,
+            device,
+            video_url,
+            published_datetime,
+            metadata_title,
+        )
+    return transcribe_with_faster_whisper(
+        source,
+        output_dir,
+        base_stem,
+        model,
+        language,
+        device,
+        compute_type,
+        video_url,
+        published_datetime,
+        metadata_title,
+    )
 
 
 def build_summary_prompt(transcript: str) -> str:
@@ -844,6 +961,9 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
                 args.min_speakers,
                 args.max_speakers,
                 args.collapse,
+                media.webpage_url,
+                media.published_datetime,
+                media.title,
             )
             outputs["txt"] = str(txt_path)
             if "summary" in formats:
@@ -871,9 +991,13 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
     }
 
 
-def is_playlist_retry_error(error: Exception) -> bool:
+def is_download_403_error(error: Exception) -> bool:
     message = str(error).lower()
     return "unable to download video data" in message and ("403" in message or "forbidden" in message)
+
+
+def is_playlist_retry_error(error: Exception) -> bool:
+    return is_download_403_error(error)
 
 
 def build_outputs(args: argparse.Namespace) -> dict:
