@@ -273,13 +273,35 @@ def test_download_youtube_audio_only_retries_403_with_android_client(monkeypatch
 
     monkeypatch.setattr(cli, "extract_downloaded_youtube", fake_extract_downloaded_youtube)
 
-    media = cli.download_youtube("https://example.com/video", tmp_path, audio_only=True)
+    media = cli.download_youtube("https://www.youtube.com/watch?v=abc123", tmp_path, audio_only=True)
 
     assert media.title == "Recovered"
     assert media.source_path.name == "Recovered [abc123].mp4"
     assert calls[0]["format"] == "bestaudio/best"
     assert calls[1]["format"] == "18/best"
     assert calls[1]["extractor_args"] == {"youtube": {"player_client": ["android"]}}
+
+
+def test_download_facebook_audio_only_does_not_use_youtube_403_fallback(monkeypatch, tmp_path):
+    calls: list[dict] = []
+
+    def fake_extract_downloaded_youtube(url, ydl_opts):
+        calls.append(ydl_opts)
+        raise cli.ToolError("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(cli, "extract_downloaded_youtube", fake_extract_downloaded_youtube)
+
+    with pytest.raises(cli.ToolError, match="HTTP Error 403"):
+        cli.download_youtube("https://www.facebook.com/share/v/1c1CCQq3N6/", tmp_path, audio_only=True)
+
+    assert len(calls) == 1
+    assert calls[0]["format"] == "bestaudio/best"
+
+
+def test_is_youtube_url_distinguishes_facebook_urls():
+    assert cli.is_youtube_url("https://www.youtube.com/watch?v=abc123")
+    assert cli.is_youtube_url("https://youtu.be/abc123")
+    assert not cli.is_youtube_url("https://www.facebook.com/share/v/1c1CCQq3N6/")
 
 
 def test_build_outputs_retries_playlist_items_after_403(monkeypatch):

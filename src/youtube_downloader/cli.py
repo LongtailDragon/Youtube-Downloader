@@ -94,11 +94,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=invoked_name,
         description=(
-            "Download a YouTube URL and optionally convert it to MKV, MP3, "
+            "Download a supported video URL and optionally convert it to MKV, MP3, "
             "or transcribe it to TXT using local tools."
         ),
     )
-    parser.add_argument("url", help="YouTube URL to download")
+    parser.add_argument("url", help="Video URL to download (YouTube, Facebook, and other yt-dlp-supported sites)")
     parser.add_argument(
         "-f",
         "--format",
@@ -347,6 +347,11 @@ def extract_downloaded_youtube(url: str, ydl_opts: dict) -> dict:
         return ydl.extract_info(url, download=True)
 
 
+def is_youtube_url(url: str) -> bool:
+    hostname = (urlparse(url).hostname or "").lower()
+    return hostname == "youtu.be" or hostname.endswith(".youtube.com") or hostname == "youtube.com"
+
+
 def download_youtube(url: str, output_dir: Path, audio_only: bool) -> DownloadedMedia:
     output_dir.mkdir(parents=True, exist_ok=True)
     before = {p.resolve() for p in output_dir.glob("**/*") if p.is_file()}
@@ -355,7 +360,7 @@ def download_youtube(url: str, output_dir: Path, audio_only: bool) -> Downloaded
     try:
         info = extract_downloaded_youtube(url, ydl_opts)
     except Exception as exc:
-        if not audio_only or not is_download_403_error(exc):
+        if not audio_only or not is_youtube_url(url) or not is_download_403_error(exc):
             raise
         print(
             "Audio-only download hit YouTube 403; retrying with the Android client fallback...",

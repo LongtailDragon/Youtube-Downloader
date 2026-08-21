@@ -1,12 +1,13 @@
 # YouTube Downloader
 
-Portable command-line tool for downloading YouTube videos, converting media, creating local transcripts, and generating local summaries.
+Portable command-line tool for downloading YouTube, Facebook, and other `yt-dlp`-supported videos, converting media, creating local transcripts, and generating local summaries.
 
 No cloud transcription APIs are required. Downloading still needs internet access, but conversion/transcription/summarization run on your machine.
 
 ## Features
 
 - Download best available source media via `yt-dlp`
+- Supports public Facebook video URLs, including `https://www.facebook.com/share/v/.../`
 - Convert/remux to `mkv`
 - Convert audio to `mp3`
 - Transcribe to `txt` using either:
@@ -170,6 +171,14 @@ Then run summary mode with either syntax:
 ytd "https://www.youtube.com/watch?v=VIDEO_ID" format summary
 ytd "https://www.youtube.com/watch?v=VIDEO_ID" --format summary
 ```
+
+Facebook example:
+
+```bash
+ytd "https://www.facebook.com/share/v/1c1CCQq3N6/"
+```
+
+The video must be publicly accessible to `yt-dlp`; Facebook may require browser cookies for age-restricted or account-only videos.
 
 ### WhisperX Diarization (speaker detection)
 
