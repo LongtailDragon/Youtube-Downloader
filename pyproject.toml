@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
 ]
 dependencies = [
-    "yt-dlp>=2025.12.8",
+    "yt-dlp>=2026.8.19",
     "faster-whisper>=1.2.1",
     "whisperx>=3.8.7rc1",
 ]
