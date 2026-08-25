@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 import sys
 import types
@@ -216,6 +217,16 @@ def test_validate_args_rejects_diarize_without_transcript_output(tmp_path):
     with pytest.raises(cli.ToolError) as excinfo:
         cli.validate_args(args)
     assert "Diarization requires transcript output" in str(excinfo.value)
+
+
+def test_project_dependencies_do_not_include_conflicting_openai_whisper():
+    project_toml = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    text = project_toml.read_text(encoding="utf-8")
+    match = re.search(r"^dependencies = \[(.*?)\]", text, re.S | re.M)
+    assert match is not None
+    dependencies = match.group(1)
+    assert '"whisperx>=3.8.7rc1"' in dependencies
+    assert 'openai-whisper' not in dependencies.lower()
 
 
 def test_build_single_output_removes_source_when_output_step_fails(monkeypatch, tmp_path):

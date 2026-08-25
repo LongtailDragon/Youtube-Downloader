@@ -24,7 +24,6 @@ classifiers = [
 dependencies = [
     "yt-dlp>=2025.12.8",
     "faster-whisper>=1.2.1",
-    "openai-whisper>=20250625",
     "whisperx>=3.8.7rc1",
 ]
 

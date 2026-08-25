@@ -84,7 +84,7 @@ uv sync
 uv tool install . --force
 ```
 
-This installs the full CLI with its default transcription and diarization dependencies. The standard install also brings in the Whisper CLI backend for the default TXT transcription flow.
+This installs the CLI with the diarization stack and local transcription backends that are compatible with each other. The global Whisper CLI backend is an optional separate install, and it should not be added to the project dependency list because it conflicts with WhisperX on PyTorch.
 
 If you are setting this up on a fresh Windows machine, make sure your PATH includes the user-local bin directory that `uv` uses for tool installs. A typical location is:
 
