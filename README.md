@@ -18,7 +18,7 @@ No cloud transcription APIs are required. Downloading still needs internet acces
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - `uv`
 - `ffmpeg` on `PATH`
 - Optional: `ollama` on `PATH` for summary mode

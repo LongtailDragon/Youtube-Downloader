@@ -3,7 +3,7 @@ name = "youtube-downloader"
 version = "0.1.0"
 description = "Local command-line YouTube downloader/converter/transcriber"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
     { name = "Red Door Blue Door LLC", email = "tobes@longtaildragon.com" },
@@ -16,7 +16,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Multimedia :: Video",

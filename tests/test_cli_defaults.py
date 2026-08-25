@@ -222,6 +222,7 @@ def test_validate_args_rejects_diarize_without_transcript_output(tmp_path):
 def test_project_dependencies_do_not_include_conflicting_openai_whisper():
     project_toml = Path(__file__).resolve().parents[1] / "pyproject.toml"
     text = project_toml.read_text(encoding="utf-8")
+    assert 'requires-python = ">=3.11"' in text
     match = re.search(r"^dependencies = \[(.*?)\]", text, re.S | re.M)
     assert match is not None
     dependencies = match.group(1)
