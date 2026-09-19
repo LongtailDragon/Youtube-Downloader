@@ -22,6 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "yt-dlp>=2025.12.8",
+    "bgutil-ytdlp-pot-provider>=2.0.0",
     "faster-whisper>=1.2.1",
     "whisperx>=3.8.7rc1",
 ]
