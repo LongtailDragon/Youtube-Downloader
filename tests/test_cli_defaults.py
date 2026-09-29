@@ -345,6 +345,59 @@ def test_build_outputs_retries_playlist_items_after_403(monkeypatch):
     assert result["items"][0]["title"] == "Recovered"
 
 
+def test_build_outputs_skips_unavailable_playlist_item_and_continues(monkeypatch, capsys):
+    playlist = cli.PlaylistInfo(
+        source_url="https://www.youtube.com/playlist?list=abc",
+        title="Demo Playlist",
+        video_urls=[
+            "https://www.youtube.com/watch?v=unavailable",
+            "https://www.youtube.com/watch?v=available",
+        ],
+    )
+    monkeypatch.setattr(cli, "extract_playlist_info", lambda _url: playlist)
+
+    seen: list[str] = []
+
+    def fake_build_single_output(_args, url):
+        seen.append(url)
+        if url.endswith("unavailable"):
+            raise cli.ToolError("ERROR: Video unavailable")
+        return {"title": "Available", "video_id": "available", "url": url, "outputs": {}}
+
+    monkeypatch.setattr(cli, "build_single_output", fake_build_single_output)
+
+    result = cli.build_outputs(cli.parse_args([playlist.source_url]))
+
+    assert seen == playlist.video_urls
+    assert result["items"] == [
+        {"title": "Available", "video_id": "available", "url": playlist.video_urls[1], "outputs": {}}
+    ]
+    assert "Skipping unavailable playlist video" in capsys.readouterr().err
+
+
+def test_build_single_output_skips_video_when_requested_format_already_exists(monkeypatch, tmp_path, capsys):
+    existing = tmp_path / "Already downloaded [abc123].txt"
+    existing.write_text("existing transcript", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "download_youtube",
+        lambda *_args, **_kwargs: pytest.fail("existing format should be skipped before downloading"),
+    )
+
+    args = cli.parse_args([
+        "https://www.youtube.com/watch?v=abc123",
+        "--format",
+        "txt",
+        "--output-dir",
+        str(tmp_path),
+    ])
+    result = cli.build_single_output(args, args.url)
+
+    assert result["skipped"] is True
+    assert result["outputs"] == {"txt": str(existing)}
+    assert "already exists" in capsys.readouterr().err
+
+
 def test_select_whisperx_compute_type_uses_best_supported_cuda_type(monkeypatch):
     fake_ctranslate2 = types.ModuleType("ctranslate2")
     fake_ctranslate2.get_supported_compute_types = lambda device: {"float32", "int8", "int8_float32"}

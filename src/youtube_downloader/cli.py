@@ -352,7 +352,38 @@ def is_youtube_url(url: str) -> bool:
     return hostname == "youtu.be" or hostname.endswith(".youtube.com") or hostname == "youtube.com"
 
 
+def video_id_from_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname == "youtu.be":
+        return parsed.path.strip("/") or None
+    if hostname == "youtube.com" or hostname.endswith(".youtube.com"):
+        return (parse_qs(parsed.query).get("v") or [None])[0]
+    return None
+
+
+def existing_requested_outputs(output_dir: Path, video_id: str, formats: Iterable[str]) -> dict[str, str]:
+    suffixes = {
+        "mkv": {".mkv"},
+        "mp3": {".mp3"},
+        "txt": {".txt"},
+        "summary": {".txt"},
+        "original": {".mp4", ".webm", ".mkv", ".m4a", ".mp3", ".mov", ".avi"},
+    }
+    existing: dict[str, str] = {}
+    candidates = [
+        path for path in output_dir.iterdir()
+        if path.is_file() and path.name.endswith(f" [{video_id}]{path.suffix}")
+    ]
+    for fmt in dict.fromkeys(formats):
+        match = next((path for path in candidates if path.suffix.lower() in suffixes[fmt]), None)
+        if match:
+            existing["txt" if fmt == "summary" else fmt] = str(match)
+    return existing
+
+
 def download_youtube(url: str, output_dir: Path, audio_only: bool) -> DownloadedMedia:
+
     output_dir.mkdir(parents=True, exist_ok=True)
     before = {p.resolve() for p in output_dir.glob("**/*") if p.is_file()}
     fmt = "bestaudio/best" if audio_only else "bv*+ba/best"
@@ -940,6 +971,20 @@ def build_single_output(args: argparse.Namespace, url: str) -> dict:
     formats, diarize_requested = normalize_formats_and_diarize(args.formats, args.diarize)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    video_id = video_id_from_url(url)
+    if video_id:
+        existing = existing_requested_outputs(args.output_dir, video_id, formats)
+        required_outputs = {"txt" if fmt == "summary" else fmt for fmt in formats}
+        if required_outputs.issubset(existing):
+            print(f"Skipping {url}: requested output already exists.", file=sys.stderr)
+            return {
+                "title": Path(next(iter(existing.values()))).stem,
+                "video_id": video_id,
+                "url": url,
+                "outputs": existing,
+                "skipped": True,
+            }
+
     needs_audio_only = args.audio_only or set(formats).issubset({"mp3", "txt", "summary"})
     media = download_youtube(url, args.output_dir, audio_only=needs_audio_only)
     base_stem = safe_stem(f"{media.title} [{media.video_id}]")
@@ -1005,6 +1050,16 @@ def is_playlist_retry_error(error: Exception) -> bool:
     return is_download_403_error(error)
 
 
+def is_unavailable_video_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in (
+        "video unavailable",
+        "this video is unavailable",
+        "private video",
+        "video has been removed",
+    ))
+
+
 def build_outputs(args: argparse.Namespace) -> dict:
     validate_args(args)
     playlist = extract_playlist_info(args.url)
@@ -1021,6 +1076,10 @@ def build_outputs(args: argparse.Namespace) -> dict:
                 item_result = build_single_output(args, video_url)
                 break
             except Exception as exc:
+                if is_unavailable_video_error(exc):
+                    print(f"Skipping unavailable playlist video {video_url}: {exc}", file=sys.stderr)
+                    item_result = None
+                    break
                 if not is_playlist_retry_error(exc):
                     raise
 
@@ -1030,7 +1089,8 @@ def build_outputs(args: argparse.Namespace) -> dict:
                 print(f"Waiting {wait_seconds} seconds before retrying this playlist item...", file=sys.stderr)
                 time.sleep(wait_seconds)
 
-        items.append(item_result)
+        if item_result is not None:
+            items.append(item_result)
 
     return {
         "playlist": {
